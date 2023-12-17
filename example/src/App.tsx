@@ -31,7 +31,7 @@ export default function App() {
           hasNextPage: json.length > 0,
           hasPreviousPage: true,
         });
-        setData([...data, ...json]);
+        setData([...data, ...json] as any);
         setLoading(false);
       }
     } catch (error) {
@@ -53,7 +53,7 @@ export default function App() {
           hasNextPage: true,
           hasPreviousPage: json.length > 0,
         });
-        setData([...json, ...data]);
+        setData([...json, ...data] as any);
       }
     } catch (error) {
       console.error(error);
@@ -68,7 +68,7 @@ export default function App() {
         <FlashList
           data={data}
           renderItem={ListItem}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item: any) => item.id}
           estimatedItemSize={80}
           ItemSeparatorComponent={() => <View style={{ height: 2 }} />}
           onEndReached={handleEndReached}
@@ -85,7 +85,7 @@ export default function App() {
   );
 }
 
-const ListItem = ({ item }: { item: { tagline: string } }) => {
+const ListItem = ({ item }: { item: any }) => {
   return (
     <View style={styles.itemContainer}>
       <Text style={styles.itemText}>{item.tagline}</Text>
