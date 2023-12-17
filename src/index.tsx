@@ -72,7 +72,7 @@ export const FlashList = React.forwardRef(
       autoscrollToTopThreshold = 100,
       data,
       enableAutoscrollToTop,
-      onEndReached = () => Promise.resolve(),
+      onEndReached = () => Promise.resolve() as any,
       onEndReachedThreshold = 10,
       onScroll,
       onStartReached = () => Promise.resolve(),
