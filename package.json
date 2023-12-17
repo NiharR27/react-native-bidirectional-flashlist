@@ -156,6 +156,7 @@
     ]
   },
   "dependencies": {
-    "@react-native/babel-preset": "^0.74.0"
+    "@react-native/babel-preset": "^0.74.0",
+    "@shopify/flash-list": "^1.6.3"
   }
 }
