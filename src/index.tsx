@@ -124,7 +124,7 @@ const BidirectionalFlashList = forwardRef(<T,>(
 
   const handleScroll = useMemo(
     () =>
-      debounce((event: any) => {
+      debounce((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         onScroll?.(event);
         const {
           contentOffset: { y: offset },
