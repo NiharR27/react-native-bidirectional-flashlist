@@ -57,6 +57,16 @@ const BidirectionalFlashList = forwardRef(<T,>(
   const onStartReachedInPromise = useRef<Promise<void> | null>(null);
   const onEndReachedInPromise = useRef<Promise<void> | null>(null);
 
+  /**
+   * Handles tracking and execution of pagination events (e.g., onStartReached, onEndReached).
+   * Ensures that the handler is called only once per data length and manages concurrent calls.
+   * 
+   * @param hasPage - Indicates if there are more pages to load (next or previous).
+   * @param tracker - A ref object to track whether the handler has been called for a specific data length.
+   * @param dataLength - The current length of the data array.
+   * @param handler - The function to execute when the pagination event is triggered.
+   * @param inPromise - A ref object to manage the state of the ongoing handler promise.
+   */
   const createTrackerCall = useCallback(
     (
       hasPage: boolean,
