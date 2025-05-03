@@ -1,14 +1,18 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  forwardRef,
+} from 'react';
 import type { MutableRefObject } from 'react';
 import type { ScrollViewProps, ViewProps } from 'react-native';
 import { FlashList as ShopifyFlashList } from '@shopify/flash-list';
 import type { FlashListProps } from '@shopify/flash-list';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 
-export type Props<T> = Omit<
-  FlashListProps<T>,
-  'maintainVisibleContentPosition'
-> & {
+export type Props<T> = Omit<FlashListProps<T>, 'maintainVisibleContentPosition'> & {
   onEndReached: () => Promise<void>;
   onStartReached: () => Promise<void>;
   enableAutoscrollToTop?: boolean;
@@ -19,194 +23,182 @@ export type Props<T> = Omit<
     hasNextPage: boolean;
     hasPreviousPage: boolean;
   };
-  ref?:
-    | ((instance: ShopifyFlashList<T> | null) => void)
-    | MutableRefObject<ShopifyFlashList<T> | null>
-    | null;
 };
 
-/**
- * Bidirectional FlashList Component
- * - Handles calling `onStartReached` and `onEndReached` for pagination.
- * - Supports auto-scrolling to the top for chat-like applications.
- */
-export const FlashList = React.forwardRef(
-  <T extends any>(
-    props: Props<T>,
-    ref:
-      | ((instance: ShopifyFlashList<T> | null) => void)
-      | MutableRefObject<ShopifyFlashList<T> | null>
-      | null
-  ) => {
-    const {
-      pageInfo = {
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-      ...restProps
-    } = props;
+type BidirectionalFlashListType = <T>(
+  props: Props<T> & { ref?: React.Ref<ShopifyFlashList<T>> }
+) => React.ReactElement;
 
-    const { hasNextPage, hasPreviousPage } = pageInfo;
+const BidirectionalFlashList = forwardRef(<T,>(
+  props: Props<T>,
+  ref: React.Ref<ShopifyFlashList<T>>
+) => {
+  const {
+    pageInfo: { hasNextPage, hasPreviousPage },
+    autoscrollToTopThreshold = 100,
+    data,
+    enableAutoscrollToTop,
+    onEndReached,
+    onEndReachedThreshold = 10,
+    onScroll,
+    onStartReached,
+    onStartReachedThreshold = 10,
+    onLayout,
+    onContentSizeChange,
+    ...restProps
+  } = props;
 
-    const {
-      autoscrollToTopThreshold = 100,
-      data,
-      enableAutoscrollToTop,
-      onEndReached = () => Promise.resolve(),
-      onEndReachedThreshold = 10,
-      onScroll,
-      onStartReached = () => Promise.resolve(),
-      onStartReachedThreshold = 10,
-      onLayout,
-      onContentSizeChange,
-    } = restProps;
+  const [contentHeight, setContentHeight] = useState(0);
+  const [layoutHeight, setLayoutHeight] = useState(0);
 
-    const [contentHeight, setContentHeight] = useState(0);
-    const [layoutHeight, setLayoutHeight] = useState(0);
+  const onStartReachedTracker = useRef<Record<number, boolean>>({});
+  const onEndReachedTracker = useRef<Record<number, boolean>>({});
 
-    const onStartReachedTracker = useRef<Record<number, boolean>>({});
-    const onEndReachedTracker = useRef<Record<number, boolean>>({});
+  const onStartReachedInPromise = useRef<Promise<void> | null>(null);
+  const onEndReachedInPromise = useRef<Promise<void> | null>(null);
 
-    const onStartReachedInPromise = useRef<Promise<void> | null>(null);
-    const onEndReachedInPromise = useRef<Promise<void> | null>(null);
-
-    const createTrackerCall = (
+  /**
+   * Handles tracking and execution of pagination events (e.g., onStartReached, onEndReached).
+   * Ensures that the handler is called only once per data length and manages concurrent calls.
+   * 
+   * @param hasPage - Indicates if there are more pages to load (next or previous).
+   * @param tracker - A ref object to track whether the handler has been called for a specific data length.
+   * @param dataLength - The current length of the data array.
+   * @param handler - The function to execute when the pagination event is triggered.
+   * @param inPromise - A ref object to manage the state of the ongoing handler promise.
+   */
+  const createTrackerCall = useCallback(
+    (
       hasPage: boolean,
       tracker: MutableRefObject<Record<number, boolean>>,
       dataLength: number | undefined,
       handler: () => Promise<void>,
       inPromise: MutableRefObject<Promise<void> | null>
     ) => {
-      if (!hasPage || !handler || !dataLength || tracker.current[dataLength]) return;
-
+      if (!hasPage || dataLength == null || tracker.current[dataLength]) {
+        return;
+      }
       tracker.current[dataLength] = true;
-      
+
       const callHandler = () => {
-        return new Promise<void>((resolve) => {
-          inPromise.current = null;
-          resolve();
-        });
+        inPromise.current = null;
+      };
+
+      const call = async () => {
+        try {
+          await handler();
+        } catch (error) {
+          console.error("Error in handler:", error);
+        } finally {
+          callHandler();
+        }
       };
 
       if (inPromise.current) {
         inPromise.current.finally(() => {
-          inPromise.current = handler()?.then(callHandler);
+          inPromise.current = call();
         });
       } else {
-        inPromise.current = handler()?.then(callHandler);
+        inPromise.current = call();
       }
-    };
+    },
+    []
+  );
 
-    const maybeCallOnStartReached = useCallback(() => {
-      createTrackerCall(
-        hasPreviousPage,
-        onStartReachedTracker,
-        data?.length,
-        onStartReached,
-        onStartReachedInPromise
-      );
-    }, [data?.length, onStartReached, hasPreviousPage]);
-
-    const maybeCallOnEndReached = useCallback(() => {
-      createTrackerCall(
-        hasNextPage,
-        onEndReachedTracker,
-        data?.length,
-        onEndReached,
-        onEndReachedInPromise
-      );
-    }, [data?.length, onEndReached, hasNextPage]);
-
-    const checkScrollPosition = useCallback(
-      (offset: number, visibleLength: number, contentLength: number) => {
-        const isScrollAtStart = offset < onStartReachedThreshold!;
-        const isScrollAtEnd =
-          contentLength - visibleLength - offset < onEndReachedThreshold!;
-
-        if (isScrollAtStart) {
-          maybeCallOnStartReached();
-        }
-
-        if (isScrollAtEnd) {
-          maybeCallOnEndReached();
-        }
-      },
-      [
-        maybeCallOnEndReached,
-        maybeCallOnStartReached,
-        onEndReachedThreshold,
-        onStartReachedThreshold,
-      ]
+  const maybeCallOnStartReached = useCallback(() => {
+    createTrackerCall(
+      hasPreviousPage,
+      onStartReachedTracker,
+      data?.length,
+      onStartReached,
+      onStartReachedInPromise
     );
+  }, [data?.length, hasPreviousPage, onStartReached, createTrackerCall]);
 
-    const handleScroll: ScrollViewProps['onScroll'] = debounce((event) => {
-      onScroll?.(event);
-
-      const offset = event.nativeEvent.contentOffset.y;
-      const visibleLength = event.nativeEvent.layoutMeasurement.height;
-      const contentLength = event.nativeEvent.contentSize.height;
-
-      checkScrollPosition(offset, visibleLength, contentLength);
-    }, 100);
-
-    const checkHeights = useCallback(
-      (checkLayoutHeight: number, checkContentHeight: number) => {
-        if (checkLayoutHeight >= checkContentHeight) {
-          checkScrollPosition(0, checkLayoutHeight, checkContentHeight);
-        }
-      },
-      [checkScrollPosition]
+  const maybeCallOnEndReached = useCallback(() => {
+    createTrackerCall(
+      hasNextPage,
+      onEndReachedTracker,
+      data?.length,
+      onEndReached,
+      onEndReachedInPromise
     );
+  }, [data?.length, hasNextPage, onEndReached, createTrackerCall]);
 
-    const realOnContentSizeChange = useCallback(
-      (w: number, newContentHeight: number) => {
-        if (onContentSizeChange) {
-          onContentSizeChange(w, newContentHeight);
-        }
-        setContentHeight(newContentHeight);
-        checkHeights(layoutHeight, newContentHeight);
-      },
-      [checkHeights, layoutHeight, onContentSizeChange]
-    );
+  const checkScrollPosition = useCallback(
+    (offset: number, visibleLength: number, contentLength: number) => {
+      if (offset < onStartReachedThreshold) {
+        maybeCallOnStartReached();
+      }
+      if (contentLength - visibleLength - offset < onEndReachedThreshold) {
+        maybeCallOnEndReached();
+      }
+    },
+    [maybeCallOnStartReached, maybeCallOnEndReached, onStartReachedThreshold, onEndReachedThreshold]
+  );
 
-    const onLayoutSizeChange: ViewProps['onLayout'] = useCallback(
-      (e) => {
-        if (onLayout) {
-          onLayout(e);
-        }
-
+  const handleScroll = useMemo(
+    () =>
+      debounce((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        onScroll?.(event);
         const {
-          nativeEvent: {
-            layout: { height },
-          },
-        } = e;
-        setLayoutHeight(height);
-        checkHeights(height, contentHeight);
-      },
-      [checkHeights, contentHeight, onLayout]
-    );
+          contentOffset: { y: offset },
+          layoutMeasurement: { height: visibleLength },
+          contentSize: { height: contentLength },
+        } = event.nativeEvent;
+        checkScrollPosition(offset, visibleLength, contentLength);
+      }, 100),
+    [onScroll, checkScrollPosition]
+  );
 
-    return (
-      <>
-        <ShopifyFlashList<T>
-          {...restProps}
-          ref={ref}
-          progressViewOffset={50}
-          onLayout={onLayoutSizeChange}
-          onContentSizeChange={realOnContentSizeChange}
-          onEndReached={null}
-          onScroll={handleScroll}
-          maintainVisibleContentPosition={
-            enableAutoscrollToTop
-              ? { autoscrollToTopThreshold, minIndexForVisible: 1 }
-              : undefined
-          }
-        />
-      </>
-    );
-  }
-) as unknown as BidirectionalFlashListType;
+  useEffect(() => {
+    return () => {
+      handleScroll.cancel();
+    };
+  }, [handleScroll]);
 
-type BidirectionalFlashListType = <T extends any>(
-  props: Props<T>
-) => React.ReactElement;
+  const checkHeights = useCallback(
+    (layoutH: number, contentH: number) => {
+      if (layoutH >= contentH) {
+        checkScrollPosition(0, layoutH, contentH);
+      }
+    },
+    [checkScrollPosition]
+  );
+
+  const realOnContentSizeChange = useCallback(
+    (w: number, newContentHeight: number) => {
+      onContentSizeChange?.(w, newContentHeight);
+      setContentHeight(newContentHeight);
+      checkHeights(layoutHeight, newContentHeight);
+    },
+    [onContentSizeChange, layoutHeight, checkHeights]
+  );
+
+  const onLayoutSizeChange: ViewProps['onLayout'] = useCallback(
+    (e) => {
+      onLayout?.(e);
+      setLayoutHeight(e.nativeEvent.layout.height);
+      checkHeights(e.nativeEvent.layout.height, contentHeight);
+    },
+    [onLayout, contentHeight, checkHeights]
+  );
+
+  return (
+    <ShopifyFlashList<T>
+      {...restProps}
+      ref={ref}
+      progressViewOffset={50}
+      onLayout={onLayoutSizeChange}
+      onContentSizeChange={realOnContentSizeChange}
+      onScroll={handleScroll}
+      maintainVisibleContentPosition={
+        enableAutoscrollToTop
+          ? { autoscrollToTopThreshold, minIndexForVisible: 1 }
+          : undefined
+      }
+    />
+  );
+}) as unknown as BidirectionalFlashListType;
+
+export default BidirectionalFlashList;
