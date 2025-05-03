@@ -85,8 +85,13 @@ const BidirectionalFlashList = forwardRef(<T,>(
       };
 
       const call = async () => {
-        await handler();
-        callHandler();
+        try {
+          await handler();
+        } catch (error) {
+          console.error("Error in handler:", error);
+        } finally {
+          callHandler();
+        }
       };
 
       if (inPromise.current) {
